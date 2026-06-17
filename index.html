@@ -95,6 +95,9 @@
     display:flex;justify-content:space-between;align-items:flex-start;gap:8px;
   }
   .crise .meta{color:var(--muted);font-size:12px;margin-top:3px}
+  .crise .ed{flex:1;cursor:pointer}
+  .crise .acts{display:flex;gap:2px;flex-shrink:0}
+  .crise .edit{color:var(--muted);background:none;border:none;font-size:16px;cursor:pointer;padding:0 4px}
   .crise .del{color:var(--accent);background:none;border:none;font-size:18px;cursor:pointer;padding:0 4px}
   .empty{color:var(--muted);text-align:center;padding:30px 0}
   .hint{color:var(--muted);font-size:12px;text-align:center;margin-top:10px;line-height:1.4}
@@ -291,6 +294,7 @@ formSave.onclick=()=>{
   if(editId){ const i=all.findIndex(c=>c.id===editId); if(i>=0){ all[i]={...all[i],...obj,dirty:true}; targetId=editId; } }
   else { targetId=Date.now(); all.push({id:targetId,...obj,synced:false}); }
   save(all); setDirty(); render(); formSheet.classList.remove("open"); toast("✓ Enregistré");
+  if(bilanSheet.classList.contains("open")) buildBilan();
   if(targetId) syncOne(targetId);
 };
 
@@ -314,12 +318,18 @@ function buildBilan(){
   const sorted=[...all].sort((a,b)=>(b.date+b.heure).localeCompare(a.date+a.heure));
   bilanList.innerHTML = sorted.map(c=>`
     <div class="crise">
-      <div>
+      <div class="ed" data-id="${c.id}">
         <b>${frDate(c.date)} · ${c.heure}</b>${syncEnabled()?((c.notionId&&!c.dirty)?'<span class="badge ok">✓ Notion</span>':'<span class="badge wait">⏳ en attente</span>'):''}
         <div class="meta">${[c.duree?c.duree+" min":"",c.type,c.intensite,c.note].filter(Boolean).join(" · ")||"—"}</div>
       </div>
-      <button class="del" data-id="${c.id}">🗑</button>
+      <div class="acts">
+        <button class="edit" data-id="${c.id}" title="Modifier">✏️</button>
+        <button class="del" data-id="${c.id}" title="Supprimer">🗑</button>
+      </div>
     </div>`).join("");
+  bilanList.querySelectorAll(".ed,.edit").forEach(el=>el.onclick=()=>{
+    const c=load().find(x=>x.id==el.dataset.id); if(c) openForm(c);
+  });
   bilanList.querySelectorAll(".del").forEach(b=>b.onclick=()=>{
     if(confirm("Supprimer cette crise ?")){
       const all=load(); const c=all.find(x=>x.id==b.dataset.id);
