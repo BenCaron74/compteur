@@ -421,12 +421,22 @@ const CFG_URL="crises_sync_url", CFG_SECRET="crises_sync_secret";
 const getCfg=()=>({url:(localStorage.getItem(CFG_URL)||"").trim(),secret:(localStorage.getItem(CFG_SECRET)||"").trim()});
 const syncEnabled=()=>!!getCfg().url;
 function markSynced(id){ const all=load(); const i=all.findIndex(x=>x.id===id); if(i>=0){ all[i].synced=true; save(all); } }
+// Construit une date ISO avec le décalage horaire local (ex. 2026-06-17T23:40:00+02:00)
+// pour que Notion affiche l'heure correcte, et pas en UTC.
+function isoLocal(dateStr, timeStr){
+  if(!timeStr) return dateStr; // date seule, sans heure
+  const [y,mo,d]=dateStr.split("-").map(Number);
+  const [h,mi]=timeStr.split(":").map(Number);
+  const off=-new Date(y,mo-1,d,h,mi,0).getTimezoneOffset(); // minutes (ex. +120)
+  const s=off>=0?"+":"-", ab=Math.abs(off);
+  return `${dateStr}T${pad(h)}:${pad(mi)}:00${s}${pad(Math.floor(ab/60))}:${pad(ab%60)}`;
+}
 async function syncCrise(id, quiet){
   const {url,secret}=getCfg(); if(!url) return false;
   const c=load().find(x=>x.id===id); if(!c||c.synced) return false;
   try{
     const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","x-app-secret":secret},
-      body:JSON.stringify({date:c.date,heure:c.heure,duree:c.duree,type:c.type,intensite:c.intensite,note:c.note,titre:"Crise du "+frDate(c.date)})});
+      body:JSON.stringify({date:isoLocal(c.date,c.heure),heure:"",duree:c.duree,type:c.type,intensite:c.intensite,note:c.note,titre:"Crise du "+frDate(c.date)})});
     if(r.ok){ markSynced(id); render(); if(!quiet) toast("✓ Enregistré dans Notion"); return true; }
     render(); if(!quiet) toast("⚠️ Notion a refusé (voir ⚙︎)"); return false;
   }catch(e){ render(); if(!quiet) toast("⏳ Hors-ligne — synchro en attente"); return false; }
