@@ -110,10 +110,15 @@
     display:block;margin:16px auto 0;background:none;border:none;color:var(--accent);
     font-size:13px;text-decoration:underline;cursor:pointer;
   }
+  .gear{
+    position:fixed;top:calc(env(safe-area-inset-top) + 8px);right:14px;z-index:30;
+    background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;
+  }
 </style>
 </head>
 <body>
 <div class="toast" id="toast">✓ Crise enregistrée</div>
+<button class="gear" id="settingsBtn" title="Réglages">⚙︎</button>
 
 <header>
   <div class="count" id="count">0</div>
@@ -175,6 +180,22 @@
   </div>
 </div>
 
+<!-- Sheet: réglages (synchro Notion) -->
+<div class="sheet" id="settingsSheet">
+  <div class="panel">
+    <h2>Synchro Notion</h2>
+    <label>URL du relais (Cloudflare)</label>
+    <input type="url" id="sUrl" placeholder="https://….workers.dev" autocapitalize="off" autocorrect="off">
+    <label>Code secret</label>
+    <input type="text" id="sSecret" placeholder="le même que dans le relais" autocapitalize="off" autocorrect="off">
+    <div class="actions">
+      <button class="btn sec" id="settingsCancel">Annuler</button>
+      <button class="btn primary" id="settingsSave">Enregistrer</button>
+    </div>
+    <div class="hint">Une fois renseigné, <b>chaque crise part automatiquement dans Notion</b>. Ces infos restent sur ce téléphone uniquement.<br>Laisse vide pour rester en mode local + export Proton.</div>
+  </div>
+</div>
+
 <script>
 const KEY = "crises_epi";
 const TYPES = ["Endormissement","Hors endormissement","Mouvement électrique parasite"];
@@ -212,11 +233,13 @@ function toast(msg){
 addBtn.addEventListener("click",()=>{
   const d=new Date();
   const all=load();
-  all.push({id:Date.now(),date:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
-            heure:`${pad(d.getHours())}:${pad(d.getMinutes())}`,duree:"",type:"",intensite:"",note:""});
+  const c={id:Date.now(),date:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
+            heure:`${pad(d.getHours())}:${pad(d.getMinutes())}`,duree:"",type:"",intensite:"",note:"",synced:false};
+  all.push(c);
   save(all); setDirty(); render();
   if(navigator.vibrate) navigator.vibrate(40);
   toast("✓ Crise enregistrée");
+  syncCrise(c.id);
 });
 
 // --- Formulaire détaillé ---
@@ -257,9 +280,11 @@ formSave.onclick=()=>{
   const all=load();
   const obj={date:fDate.value,heure:fHeure.value,duree:fDuree.value,type:fType.value.trim(),intensite:fIntensite.value.trim(),note:fNote.value.trim()};
   if(!obj.date||!obj.heure){ toast("Date et heure requises"); return; }
+  let nouvelId=null;
   if(editId){ const i=all.findIndex(c=>c.id===editId); if(i>=0) all[i]={...all[i],...obj}; }
-  else { all.push({id:Date.now(),...obj}); }
+  else { nouvelId=Date.now(); all.push({id:nouvelId,...obj,synced:false}); }
   save(all); setDirty(); render(); formSheet.classList.remove("open"); toast("✓ Enregistré");
+  if(nouvelId) syncCrise(nouvelId);
 };
 
 // --- Bilan ---
@@ -322,7 +347,7 @@ async function exportCSV(){
 }
 function markBackup(){ localStorage.setItem(BKEY,Date.now()); clearDirty(); render(); toast("✓ Sauvegarde lancée"); }
 exportBtn.onclick=exportCSV;
-backupNow.onclick=exportCSV;
+backupNow.onclick=()=>{ if(syncEnabled()) syncPending(); else exportCSV(); };
 
 // --- Import CSV (restauration / fusion sans doublon) ---
 function parseCSV(text){
@@ -380,17 +405,59 @@ importFile.onchange=e=>{
   r.readAsText(f);
 };
 
-// Alerte de sauvegarde : visible dès qu'une crise est ajoutée/modifiée et pas
-// encore sauvegardée vers Proton. Reste affichée jusqu'à l'export.
 const DKEY="crises_dirty";
 function setDirty(){ localStorage.setItem(DKEY,"1"); }
 function clearDirty(){ localStorage.removeItem(DKEY); }
+
+// --- Synchronisation Notion (via relais Cloudflare) ---
+const CFG_URL="crises_sync_url", CFG_SECRET="crises_sync_secret";
+const getCfg=()=>({url:(localStorage.getItem(CFG_URL)||"").trim(),secret:(localStorage.getItem(CFG_SECRET)||"").trim()});
+const syncEnabled=()=>!!getCfg().url;
+function markSynced(id){ const all=load(); const i=all.findIndex(x=>x.id===id); if(i>=0){ all[i].synced=true; save(all); } }
+async function syncCrise(id){
+  const {url,secret}=getCfg(); if(!url) return false;
+  const c=load().find(x=>x.id===id); if(!c||c.synced) return false;
+  try{
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","x-app-secret":secret},
+      body:JSON.stringify({date:c.date,heure:c.heure,duree:c.duree,type:c.type,intensite:c.intensite,note:c.note,titre:"Crise du "+frDate(c.date)})});
+    if(r.ok){ markSynced(id); render(); return true; }
+  }catch(e){}
+  render(); return false;
+}
+async function syncPending(){
+  if(!syncEnabled()){ render(); return; }
+  for(const id of load().filter(c=>!c.synced).map(c=>c.id)){ await syncCrise(id); }
+}
+window.addEventListener("online",syncPending);
+
+// Bannière : statut de synchro (mode Notion) OU alerte sauvegarde (mode local/Proton)
 function updateBackupBanner(){
-  const dirty = localStorage.getItem(DKEY)==="1" && load().length>0;
-  backupBanner.style.display = dirty ? "flex" : "none";
+  const all=load();
+  if(syncEnabled()){
+    const pend=all.filter(c=>!c.synced).length;
+    backupMsg.textContent=`⏳ ${pend} crise(s) à synchroniser avec Notion`;
+    backupNow.textContent="Réessayer";
+    backupBanner.style.display = pend>0 ? "flex" : "none";
+  }else{
+    backupMsg.textContent="⚠️ Crise non sauvegardée — sauvegarde vers Proton";
+    backupNow.textContent="Sauvegarder";
+    const dirty = localStorage.getItem(DKEY)==="1" && all.length>0;
+    backupBanner.style.display = dirty ? "flex" : "none";
+  }
 }
 
-buildChips(); render();
+// --- Réglages ---
+settingsBtn.onclick=()=>{ const{url,secret}=getCfg(); sUrl.value=url; sSecret.value=secret; settingsSheet.classList.add("open"); };
+settingsCancel.onclick=()=>settingsSheet.classList.remove("open");
+settingsSave.onclick=()=>{
+  localStorage.setItem(CFG_URL,sUrl.value.trim());
+  localStorage.setItem(CFG_SECRET,sSecret.value.trim());
+  settingsSheet.classList.remove("open");
+  toast(syncEnabled()?"✓ Synchro Notion activée":"Synchro désactivée");
+  syncPending();
+};
+
+buildChips(); render(); syncPending();
 </script>
 </body>
 </html>
