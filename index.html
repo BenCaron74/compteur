@@ -307,7 +307,7 @@ function buildCSV(){
 async function exportCSV(){
   if(load().length===0){ toast("Aucune crise à sauvegarder"); return; }
   const csv=buildCSV();
-  const nom="crises_"+new Date().toISOString().slice(0,10)+".csv";
+  const nom="crises.csv"; // nom fixe : chaque sauvegarde remplace la précédente dans Proton
   const file=new File([csv],nom,{type:"text/csv"});
   // iPhone : ouvre le menu de partage natif (Proton Drive, Fichiers, Mail…)
   if(navigator.canShare && navigator.canShare({files:[file]})){
