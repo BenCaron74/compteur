@@ -24,6 +24,12 @@
   header{text-align:center;padding:20px 0 8px}
   header .count{font-size:46px;font-weight:800;line-height:1}
   header .label{color:var(--muted);font-size:15px;margin-top:6px}
+  .syncStatus{font-size:13px;margin-top:8px;min-height:18px;font-weight:600}
+  .syncStatus.ok{color:var(--ok)}
+  .syncStatus.off{color:var(--muted);font-weight:400}
+  .badge{font-size:11px;padding:1px 7px;border-radius:8px;margin-left:6px;vertical-align:middle}
+  .badge.ok{background:rgba(76,175,125,.22);color:var(--ok)}
+  .badge.wait{background:rgba(224,169,61,.22);color:#e0a93d}
   main{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:18px}
   .bigbtn{
     width:200px;height:200px;border-radius:50%;border:none;
@@ -123,6 +129,7 @@
 <header>
   <div class="count" id="count">0</div>
   <div class="label" id="monthLabel">crise ce mois-ci</div>
+  <div class="syncStatus" id="syncStatus"></div>
 </header>
 
 <main>
@@ -175,7 +182,7 @@
       <button class="btn primary" id="bilanClose">Fermer</button>
     </div>
     <input type="file" id="importFile" accept=".csv,text/csv" style="display:none">
-    <div class="hint"><b>Exporter</b> : ouvre le partage → choisis <b>Proton Drive</b> (à partager en lecture à ta neurologue).<br><b>Importer</b> : recharge un CSV sauvegardé (ex. après un effacement de Safari ou un changement de téléphone).</div>
+    <div class="hint">Tes crises se synchronisent automatiquement dans <b>Notion</b>. Ces boutons sont un secours optionnel :<br><b>Exporter</b> : enregistre un CSV (Fichiers, mail…). <b>Importer</b> : recharge un CSV (après effacement ou changement d'appareil).</div>
     <button id="resetBtn" class="reset">Effacer toutes les données</button>
   </div>
 </div>
@@ -192,7 +199,7 @@
       <button class="btn sec" id="settingsCancel">Annuler</button>
       <button class="btn primary" id="settingsSave">Enregistrer</button>
     </div>
-    <div class="hint">Une fois renseigné, <b>chaque crise part automatiquement dans Notion</b>. Ces infos restent sur ce téléphone uniquement.<br>Laisse vide pour rester en mode local + export Proton.</div>
+    <div class="hint">Une fois renseigné, <b>chaque crise part automatiquement dans Notion</b>. Ces infos restent sur ce téléphone uniquement.<br>Laisse vide pour rester en mode local + export CSV.</div>
   </div>
 </div>
 
@@ -308,7 +315,7 @@ function buildBilan(){
   bilanList.innerHTML = sorted.map(c=>`
     <div class="crise">
       <div>
-        <b>${frDate(c.date)} · ${c.heure}</b>
+        <b>${frDate(c.date)} · ${c.heure}</b>${syncEnabled()?(c.synced?'<span class="badge ok">✓ Notion</span>':'<span class="badge wait">⏳ en attente</span>'):''}
         <div class="meta">${[c.duree?c.duree+" min":"",c.type,c.intensite,c.note].filter(Boolean).join(" · ")||"—"}</div>
       </div>
       <button class="del" data-id="${c.id}">🗑</button>
@@ -414,33 +421,46 @@ const CFG_URL="crises_sync_url", CFG_SECRET="crises_sync_secret";
 const getCfg=()=>({url:(localStorage.getItem(CFG_URL)||"").trim(),secret:(localStorage.getItem(CFG_SECRET)||"").trim()});
 const syncEnabled=()=>!!getCfg().url;
 function markSynced(id){ const all=load(); const i=all.findIndex(x=>x.id===id); if(i>=0){ all[i].synced=true; save(all); } }
-async function syncCrise(id){
+async function syncCrise(id, quiet){
   const {url,secret}=getCfg(); if(!url) return false;
   const c=load().find(x=>x.id===id); if(!c||c.synced) return false;
   try{
     const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","x-app-secret":secret},
       body:JSON.stringify({date:c.date,heure:c.heure,duree:c.duree,type:c.type,intensite:c.intensite,note:c.note,titre:"Crise du "+frDate(c.date)})});
-    if(r.ok){ markSynced(id); render(); return true; }
-  }catch(e){}
-  render(); return false;
+    if(r.ok){ markSynced(id); render(); if(!quiet) toast("✓ Enregistré dans Notion"); return true; }
+    render(); if(!quiet) toast("⚠️ Notion a refusé (voir ⚙︎)"); return false;
+  }catch(e){ render(); if(!quiet) toast("⏳ Hors-ligne — synchro en attente"); return false; }
 }
 async function syncPending(){
   if(!syncEnabled()){ render(); return; }
-  for(const id of load().filter(c=>!c.synced).map(c=>c.id)){ await syncCrise(id); }
+  const ids=load().filter(c=>!c.synced).map(c=>c.id);
+  if(!ids.length){ render(); return; }
+  let ok=0; for(const id of ids){ if(await syncCrise(id,true)) ok++; }
+  render();
+  toast(ok ? `✓ ${ok} crise(s) synchronisée(s)` : "⏳ Synchro en attente (hors-ligne ?)");
 }
 window.addEventListener("online",syncPending);
 
-// Bannière : statut de synchro (mode Notion) OU alerte sauvegarde (mode local/Proton)
+// Statut de synchro Notion (bien visible) + bannière "en attente" si besoin
 function updateBackupBanner(){
   const all=load();
   if(syncEnabled()){
     const pend=all.filter(c=>!c.synced).length;
-    backupMsg.textContent=`⏳ ${pend} crise(s) à synchroniser avec Notion`;
-    backupNow.textContent="Réessayer";
-    backupBanner.style.display = pend>0 ? "flex" : "none";
+    if(pend>0){
+      syncStatus.textContent=""; syncStatus.className="syncStatus";
+      backupMsg.textContent=`⏳ ${pend} crise(s) à synchroniser avec Notion`;
+      backupNow.textContent="Réessayer";
+      backupBanner.style.display="flex";
+    }else{
+      syncStatus.textContent = all.length ? "✓ Synchronisé avec Notion" : "✓ Connecté à Notion";
+      syncStatus.className="syncStatus ok";
+      backupBanner.style.display="none";
+    }
   }else{
-    backupMsg.textContent="⚠️ Crise non sauvegardée — sauvegarde vers Proton";
-    backupNow.textContent="Sauvegarder";
+    syncStatus.textContent="Synchro Notion non configurée — appuie sur ⚙︎";
+    syncStatus.className="syncStatus off";
+    backupMsg.textContent="⚠️ Crise non sauvegardée — pense à exporter";
+    backupNow.textContent="Exporter";
     const dirty = localStorage.getItem(DKEY)==="1" && all.length>0;
     backupBanner.style.display = dirty ? "flex" : "none";
   }
