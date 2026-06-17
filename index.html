@@ -246,7 +246,7 @@ addBtn.addEventListener("click",()=>{
   save(all); setDirty(); render();
   if(navigator.vibrate) navigator.vibrate(40);
   toast("✓ Crise enregistrée");
-  syncCrise(c.id);
+  syncOne(c.id);
 });
 
 // --- Formulaire détaillé ---
@@ -287,11 +287,11 @@ formSave.onclick=()=>{
   const all=load();
   const obj={date:fDate.value,heure:fHeure.value,duree:fDuree.value,type:fType.value.trim(),intensite:fIntensite.value.trim(),note:fNote.value.trim()};
   if(!obj.date||!obj.heure){ toast("Date et heure requises"); return; }
-  let nouvelId=null;
-  if(editId){ const i=all.findIndex(c=>c.id===editId); if(i>=0) all[i]={...all[i],...obj}; }
-  else { nouvelId=Date.now(); all.push({id:nouvelId,...obj,synced:false}); }
+  let targetId=null;
+  if(editId){ const i=all.findIndex(c=>c.id===editId); if(i>=0){ all[i]={...all[i],...obj,dirty:true}; targetId=editId; } }
+  else { targetId=Date.now(); all.push({id:targetId,...obj,synced:false}); }
   save(all); setDirty(); render(); formSheet.classList.remove("open"); toast("✓ Enregistré");
-  if(nouvelId) syncCrise(nouvelId);
+  if(targetId) syncOne(targetId);
 };
 
 // --- Bilan ---
@@ -315,14 +315,17 @@ function buildBilan(){
   bilanList.innerHTML = sorted.map(c=>`
     <div class="crise">
       <div>
-        <b>${frDate(c.date)} · ${c.heure}</b>${syncEnabled()?(c.synced?'<span class="badge ok">✓ Notion</span>':'<span class="badge wait">⏳ en attente</span>'):''}
+        <b>${frDate(c.date)} · ${c.heure}</b>${syncEnabled()?((c.notionId&&!c.dirty)?'<span class="badge ok">✓ Notion</span>':'<span class="badge wait">⏳ en attente</span>'):''}
         <div class="meta">${[c.duree?c.duree+" min":"",c.type,c.intensite,c.note].filter(Boolean).join(" · ")||"—"}</div>
       </div>
       <button class="del" data-id="${c.id}">🗑</button>
     </div>`).join("");
   bilanList.querySelectorAll(".del").forEach(b=>b.onclick=()=>{
     if(confirm("Supprimer cette crise ?")){
-      save(load().filter(c=>c.id!=b.dataset.id)); setDirty(); render(); buildBilan();
+      const all=load(); const c=all.find(x=>x.id==b.dataset.id);
+      if(c&&c.notionId){ const dels=getDeletes(); dels.push(c.notionId); setDeletes(dels); }
+      save(all.filter(x=>x.id!=b.dataset.id)); setDirty(); render(); buildBilan();
+      syncPending();
     }
   });
 }
@@ -420,32 +423,66 @@ function clearDirty(){ localStorage.removeItem(DKEY); }
 const CFG_URL="crises_sync_url", CFG_SECRET="crises_sync_secret";
 const getCfg=()=>({url:(localStorage.getItem(CFG_URL)||"").trim(),secret:(localStorage.getItem(CFG_SECRET)||"").trim()});
 const syncEnabled=()=>!!getCfg().url;
-function markSynced(id){ const all=load(); const i=all.findIndex(x=>x.id===id); if(i>=0){ all[i].synced=true; save(all); } }
-// Construit une date ISO avec le décalage horaire local (ex. 2026-06-17T23:40:00+02:00)
-// pour que Notion affiche l'heure correcte, et pas en UTC.
+function setCrise(id, patch){ const all=load(); const i=all.findIndex(x=>x.id===id); if(i>=0){ all[i]={...all[i],...patch}; save(all); } }
+
+// File d'attente des suppressions (id Notion à archiver)
+const DELKEY="crises_pending_delete";
+const getDeletes=()=>{ try{return JSON.parse(localStorage.getItem(DELKEY))||[]}catch(e){return[]} };
+const setDeletes=(a)=>localStorage.setItem(DELKEY, JSON.stringify(a));
+
+// Une crise est "en attente" si pas encore créée dans Notion, ou modifiée depuis.
+function isPending(c){ return (!c.notionId && !c.synced) || c.dirty; }
+
+// Date ISO avec décalage horaire local (ex. 2026-06-17T23:40:00+02:00) → heure correcte dans Notion
 function isoLocal(dateStr, timeStr){
-  if(!timeStr) return dateStr; // date seule, sans heure
+  if(!timeStr) return dateStr;
   const [y,mo,d]=dateStr.split("-").map(Number);
   const [h,mi]=timeStr.split(":").map(Number);
-  const off=-new Date(y,mo-1,d,h,mi,0).getTimezoneOffset(); // minutes (ex. +120)
+  const off=-new Date(y,mo-1,d,h,mi,0).getTimezoneOffset();
   const s=off>=0?"+":"-", ab=Math.abs(off);
   return `${dateStr}T${pad(h)}:${pad(mi)}:00${s}${pad(Math.floor(ab/60))}:${pad(ab%60)}`;
 }
-async function syncCrise(id, quiet){
-  const {url,secret}=getCfg(); if(!url) return false;
-  const c=load().find(x=>x.id===id); if(!c||c.synced) return false;
-  try{
-    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","x-app-secret":secret},
-      body:JSON.stringify({date:isoLocal(c.date,c.heure),heure:"",duree:c.duree,type:c.type,intensite:c.intensite,note:c.note,titre:"Crise du "+frDate(c.date)})});
-    if(r.ok){ markSynced(id); render(); if(!quiet) toast("✓ Enregistré dans Notion"); return true; }
-    render(); if(!quiet) toast("⚠️ Notion a refusé (voir ⚙︎)"); return false;
-  }catch(e){ render(); if(!quiet) toast("⏳ Hors-ligne — synchro en attente"); return false; }
+function payloadFor(c){
+  return {date:isoLocal(c.date,c.heure),heure:"",duree:c.duree,type:c.type,intensite:c.intensite,note:c.note,titre:"Crise du "+frDate(c.date)};
 }
+async function sendToRelais(payload){
+  const {url,secret}=getCfg(); if(!url) return null;
+  try{
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","x-app-secret":secret},body:JSON.stringify(payload)});
+    if(r.ok) return await r.json();
+  }catch(e){}
+  return null;
+}
+
+async function syncOne(id, quiet){
+  const c=load().find(x=>x.id===id); if(!c) return false;
+  if(!c.notionId && !c.synced){            // création
+    const res=await sendToRelais({action:"create",...payloadFor(c)});
+    if(res&&res.id){ setCrise(id,{notionId:res.id,synced:true,dirty:false}); render(); if(!quiet) toast("✓ Enregistré dans Notion"); return true; }
+    render(); if(!quiet) toast("⏳ Hors-ligne — synchro en attente"); return false;
+  }
+  if(c.dirty && c.notionId){               // modification
+    const res=await sendToRelais({action:"update",pageId:c.notionId,...payloadFor(c)});
+    if(res){ setCrise(id,{dirty:false}); render(); if(!quiet) toast("✓ Mise à jour dans Notion"); return true; }
+    render(); if(!quiet) toast("⏳ Mise à jour en attente"); return false;
+  }
+  if(c.dirty){ setCrise(id,{dirty:false}); } // ancienne crise sans id Notion : rien à pousser
+  return true;
+}
+
+async function processDeletes(){
+  let dels=getDeletes(); if(!dels.length) return;
+  const reste=[];
+  for(const pid of dels){ const res=await sendToRelais({action:"delete",pageId:pid}); if(!res) reste.push(pid); }
+  setDeletes(reste);
+}
+
 async function syncPending(){
   if(!syncEnabled()){ render(); return; }
-  const ids=load().filter(c=>!c.synced).map(c=>c.id);
+  await processDeletes();
+  const ids=load().filter(isPending).map(c=>c.id);
   if(!ids.length){ render(); return; }
-  let ok=0; for(const id of ids){ if(await syncCrise(id,true)) ok++; }
+  let ok=0; for(const id of ids){ if(await syncOne(id,true)) ok++; }
   render();
   toast(ok ? `✓ ${ok} crise(s) synchronisée(s)` : "⏳ Synchro en attente (hors-ligne ?)");
 }
@@ -455,7 +492,7 @@ window.addEventListener("online",syncPending);
 function updateBackupBanner(){
   const all=load();
   if(syncEnabled()){
-    const pend=all.filter(c=>!c.synced).length;
+    const pend=all.filter(isPending).length + getDeletes().length;
     if(pend>0){
       syncStatus.textContent=""; syncStatus.className="syncStatus";
       backupMsg.textContent=`⏳ ${pend} crise(s) à synchroniser avec Notion`;
