@@ -93,13 +93,18 @@
   .empty{color:var(--muted);text-align:center;padding:30px 0}
   .hint{color:var(--muted);font-size:12px;text-align:center;margin-top:10px;line-height:1.4}
   .backup{
-    display:flex;align-items:center;gap:10px;background:#3a2e1a;border:1px solid #6b5320;
-    border-radius:14px;padding:12px 14px;max-width:420px;width:100%;font-size:14px;
+    display:flex;align-items:center;gap:10px;background:#4a1f1a;border:1px solid var(--accent);
+    border-radius:14px;padding:14px;max-width:420px;width:100%;font-size:14px;
+    animation:pulse 1.6s ease-in-out infinite;
   }
-  .backup span{flex:1;color:#f0d28a}
+  .backup span{flex:1;color:#ffd0c6;font-weight:600}
   .backup button{
-    background:#e0a93d;color:#1b2230;border:none;border-radius:10px;
-    padding:9px 14px;font-weight:700;cursor:pointer;white-space:nowrap;
+    background:var(--accent);color:#fff;border:none;border-radius:10px;
+    padding:10px 16px;font-weight:700;cursor:pointer;white-space:nowrap;
+  }
+  @keyframes pulse{
+    0%,100%{box-shadow:0 0 0 0 rgba(224,83,61,.55)}
+    50%{box-shadow:0 0 0 9px rgba(224,83,61,0)}
   }
 </style>
 </head>
@@ -118,7 +123,7 @@
   </button>
   <div class="last" id="last"></div>
   <div class="backup" id="backupBanner" style="display:none">
-    <span id="backupMsg">Pense à sauvegarder vers Proton</span>
+    <span id="backupMsg">⚠️ Crise non sauvegardée — sauvegarde vers Proton</span>
     <button id="backupNow">Sauvegarder</button>
   </div>
   <div class="row">
@@ -204,7 +209,7 @@ addBtn.addEventListener("click",()=>{
   const all=load();
   all.push({id:Date.now(),date:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
             heure:`${pad(d.getHours())}:${pad(d.getMinutes())}`,duree:"",type:"",intensite:"",note:""});
-  save(all); render();
+  save(all); setDirty(); render();
   if(navigator.vibrate) navigator.vibrate(40);
   toast("✓ Crise enregistrée");
 });
@@ -249,7 +254,7 @@ formSave.onclick=()=>{
   if(!obj.date||!obj.heure){ toast("Date et heure requises"); return; }
   if(editId){ const i=all.findIndex(c=>c.id===editId); if(i>=0) all[i]={...all[i],...obj}; }
   else { all.push({id:Date.now(),...obj}); }
-  save(all); render(); formSheet.classList.remove("open"); toast("✓ Enregistré");
+  save(all); setDirty(); render(); formSheet.classList.remove("open"); toast("✓ Enregistré");
 };
 
 // --- Bilan ---
@@ -280,7 +285,7 @@ function buildBilan(){
     </div>`).join("");
   bilanList.querySelectorAll(".del").forEach(b=>b.onclick=()=>{
     if(confirm("Supprimer cette crise ?")){
-      save(load().filter(c=>c.id!=b.dataset.id)); render(); buildBilan();
+      save(load().filter(c=>c.id!=b.dataset.id)); setDirty(); render(); buildBilan();
     }
   });
 }
@@ -310,7 +315,7 @@ async function exportCSV(){
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   markBackup();
 }
-function markBackup(){ localStorage.setItem(BKEY,Date.now()); render(); toast("✓ Sauvegarde lancée"); }
+function markBackup(){ localStorage.setItem(BKEY,Date.now()); clearDirty(); render(); toast("✓ Sauvegarde lancée"); }
 exportBtn.onclick=exportCSV;
 backupNow.onclick=exportCSV;
 
@@ -363,21 +368,14 @@ importFile.onchange=e=>{
   r.readAsText(f);
 };
 
-// Rappel de sauvegarde : si des crises non sauvegardées depuis > 7 jours
+// Alerte de sauvegarde : visible dès qu'une crise est ajoutée/modifiée et pas
+// encore sauvegardée vers Proton. Reste affichée jusqu'à l'export.
+const DKEY="crises_dirty";
+function setDirty(){ localStorage.setItem(DKEY,"1"); }
+function clearDirty(){ localStorage.removeItem(DKEY); }
 function updateBackupBanner(){
-  const all=load();
-  if(all.length===0){ backupBanner.style.display="none"; return; }
-  const last=+localStorage.getItem(BKEY)||0;
-  const jours=Math.floor((Date.now()-last)/86400000);
-  if(!last){
-    backupMsg.textContent="Pense à sauvegarder vers Proton (jamais sauvegardé)";
-    backupBanner.style.display="flex";
-  }else if(jours>=7){
-    backupMsg.textContent=`Dernière sauvegarde il y a ${jours} jours — pense à sauvegarder`;
-    backupBanner.style.display="flex";
-  }else{
-    backupBanner.style.display="none";
-  }
+  const dirty = localStorage.getItem(DKEY)==="1" && load().length>0;
+  backupBanner.style.display = dirty ? "flex" : "none";
 }
 
 buildChips(); render();
