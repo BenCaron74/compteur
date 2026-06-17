@@ -156,10 +156,12 @@
     <div id="bilanMonths"></div>
     <div id="bilanList"></div>
     <div class="actions">
-      <button class="btn sec" id="exportBtn">⬇ Exporter (CSV)</button>
+      <button class="btn sec" id="exportBtn">⬇ Exporter</button>
+      <button class="btn sec" id="importBtn">⬆ Importer</button>
       <button class="btn primary" id="bilanClose">Fermer</button>
     </div>
-    <div class="hint">L'export ouvre le menu de partage : choisis <b>Proton Drive</b> (ou « Enregistrer dans Fichiers »). À partager en lecture à ta neurologue.</div>
+    <input type="file" id="importFile" accept=".csv,text/csv" style="display:none">
+    <div class="hint"><b>Exporter</b> : ouvre le partage → choisis <b>Proton Drive</b> (à partager en lecture à ta neurologue).<br><b>Importer</b> : recharge un CSV sauvegardé (ex. après un effacement de Safari ou un changement de téléphone).</div>
   </div>
 </div>
 
@@ -311,6 +313,55 @@ async function exportCSV(){
 function markBackup(){ localStorage.setItem(BKEY,Date.now()); render(); toast("✓ Sauvegarde lancée"); }
 exportBtn.onclick=exportCSV;
 backupNow.onclick=exportCSV;
+
+// --- Import CSV (restauration / fusion sans doublon) ---
+function parseCSV(text){
+  const rows=[]; let field="",row=[],q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(q){
+      if(ch==='"'){ if(text[i+1]==='"'){field+='"';i++;} else q=false; }
+      else field+=ch;
+    }else{
+      if(ch==='"') q=true;
+      else if(ch===',') {row.push(field);field="";}
+      else if(ch==='\n'){row.push(field);rows.push(row);row=[];field="";}
+      else if(ch!=='\r') field+=ch;
+    }
+  }
+  if(field!==""||row.length){row.push(field);rows.push(row);}
+  return rows.filter(r=>r.some(c=>c.trim()!==""));
+}
+function importCSV(text){
+  const rows=parseCSV(text);
+  if(!rows.length){ toast("Fichier vide"); return; }
+  const head=rows[0].map(h=>h.trim().toLowerCase());
+  const hasHead=head.includes("date");
+  const col=n=>head.indexOf(n);
+  const map=hasHead
+    ? {date:col("date"),heure:col("heure"),duree:col("duree_min"),type:col("type"),intensite:col("intensite"),note:col("note")}
+    : {date:0,heure:1,duree:2,type:3,intensite:4,note:5};
+  const all=load();
+  const sig=c=>[c.date,c.heure,c.type,c.intensite,c.note].join("|");
+  const seen=new Set(all.map(sig));
+  let n=0;
+  rows.slice(hasHead?1:0).forEach(r=>{
+    const g=k=>map[k]>=0?(r[map[k]]||"").trim():"";
+    const c={date:g("date"),heure:g("heure"),duree:g("duree"),type:g("type"),intensite:g("intensite"),note:g("note")};
+    if(!c.date||seen.has(sig(c))) return;
+    c.id=Date.now()+Math.floor(Math.random()*1e5);
+    all.push(c); seen.add(sig(c)); n++;
+  });
+  save(all); render(); buildBilan();
+  toast(n?`✓ ${n} crise(s) importée(s)`:"Aucune nouvelle crise");
+}
+importBtn.onclick=()=>importFile.click();
+importFile.onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ importCSV(String(r.result)); importFile.value=""; };
+  r.readAsText(f);
+};
 
 // Rappel de sauvegarde : si des crises non sauvegardées depuis > 7 jours
 function updateBackupBanner(){
