@@ -121,9 +121,12 @@
     <label>Date</label><input type="date" id="fDate">
     <label>Heure</label><input type="time" id="fHeure">
     <label>Durée (minutes)</label><input type="number" id="fDuree" step="0.5" min="0" inputmode="decimal" placeholder="ex. 2">
-    <label>Type / intensité</label>
-    <input type="text" id="fType" placeholder="ex. tonico-clonique, forte…">
+    <label>Type de crise</label>
+    <input type="text" id="fType" placeholder="ex. endormissement…">
     <div class="chips" id="typeChips"></div>
+    <label>Intensité</label>
+    <input type="text" id="fIntensite" placeholder="légère / modérée / forte">
+    <div class="chips" id="intChips"></div>
     <label>Note</label>
     <textarea id="fNote" placeholder="fatigue, oubli de médicament, contexte…"></textarea>
     <div class="actions">
@@ -149,7 +152,8 @@
 
 <script>
 const KEY = "crises_epi";
-const TYPES = ["tonico-clonique","absence","myoclonie","focale","légère","forte"];
+const TYPES = ["Endormissement","Hors endormissement","Mouvement électrique parasite"];
+const INTENSITES = ["légère","modérée","forte"];
 let editId = null;
 
 const load = () => { try{return JSON.parse(localStorage.getItem(KEY))||[]}catch(e){return[]} };
@@ -183,22 +187,26 @@ addBtn.addEventListener("click",()=>{
   const d=new Date();
   const all=load();
   all.push({id:Date.now(),date:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
-            heure:`${pad(d.getHours())}:${pad(d.getMinutes())}`,duree:"",type:"",note:""});
+            heure:`${pad(d.getHours())}:${pad(d.getMinutes())}`,duree:"",type:"",intensite:"",note:""});
   save(all); render();
   if(navigator.vibrate) navigator.vibrate(40);
   toast("✓ Crise enregistrée");
 });
 
 // --- Formulaire détaillé ---
-function buildChips(){
-  typeChips.innerHTML="";
-  TYPES.forEach(t=>{
+function buildChipGroup(container,values,input){
+  container.innerHTML="";
+  values.forEach(t=>{
     const c=document.createElement("span"); c.className="chip"; c.textContent=t;
-    c.onclick=()=>{ fType.value=t; refreshChips(); };
-    typeChips.appendChild(c);
+    c.onclick=()=>{ input.value=(input.value===t?"":t); refreshChips(); };
+    container.appendChild(c);
   });
 }
-function refreshChips(){ [...typeChips.children].forEach(c=>c.classList.toggle("sel",c.textContent===fType.value)); }
+function buildChips(){ buildChipGroup(typeChips,TYPES,fType); buildChipGroup(intChips,INTENSITES,fIntensite); }
+function refreshChips(){
+  [...typeChips.children].forEach(c=>c.classList.toggle("sel",c.textContent===fType.value));
+  [...intChips.children].forEach(c=>c.classList.toggle("sel",c.textContent===fIntensite.value));
+}
 
 function openForm(crise){
   editId = crise ? crise.id : null;
@@ -207,8 +215,9 @@ function openForm(crise){
   fDate.value = crise?crise.date:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   fHeure.value= crise?crise.heure:`${pad(d.getHours())}:${pad(d.getMinutes())}`;
   fDuree.value= crise?crise.duree:"";
-  fType.value = crise?crise.type:"";
-  fNote.value = crise?crise.note:"";
+  fType.value = crise?(crise.type||""):"";
+  fIntensite.value = crise?(crise.intensite||""):"";
+  fNote.value = crise?(crise.note||""):"";
   refreshChips();
   formSheet.classList.add("open");
 }
@@ -220,7 +229,7 @@ detailsBtn.onclick=()=>{
 formCancel.onclick=()=>formSheet.classList.remove("open");
 formSave.onclick=()=>{
   const all=load();
-  const obj={date:fDate.value,heure:fHeure.value,duree:fDuree.value,type:fType.value.trim(),note:fNote.value.trim()};
+  const obj={date:fDate.value,heure:fHeure.value,duree:fDuree.value,type:fType.value.trim(),intensite:fIntensite.value.trim(),note:fNote.value.trim()};
   if(!obj.date||!obj.heure){ toast("Date et heure requises"); return; }
   if(editId){ const i=all.findIndex(c=>c.id===editId); if(i>=0) all[i]={...all[i],...obj}; }
   else { all.push({id:Date.now(),...obj}); }
@@ -249,7 +258,7 @@ function buildBilan(){
     <div class="crise">
       <div>
         <b>${frDate(c.date)} · ${c.heure}</b>
-        <div class="meta">${[c.duree?c.duree+" min":"",c.type,c.note].filter(Boolean).join(" · ")||"—"}</div>
+        <div class="meta">${[c.duree?c.duree+" min":"",c.type,c.intensite,c.note].filter(Boolean).join(" · ")||"—"}</div>
       </div>
       <button class="del" data-id="${c.id}">🗑</button>
     </div>`).join("");
@@ -264,8 +273,8 @@ function buildBilan(){
 function csvCell(v){ v=(v??"").toString(); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
 exportBtn.onclick=()=>{
   const all=load().sort((a,b)=>(a.date+a.heure).localeCompare(b.date+b.heure));
-  let csv="date,heure,duree_min,type_intensite,note\n";
-  all.forEach(c=>{csv+=[c.date,c.heure,c.duree,c.type,c.note].map(csvCell).join(",")+"\n";});
+  let csv="date,heure,duree_min,type,intensite,note\n";
+  all.forEach(c=>{csv+=[c.date,c.heure,c.duree,c.type,c.intensite,c.note].map(csvCell).join(",")+"\n";});
   const blob=new Blob([csv],{type:"text/csv"});
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob); a.download="crises.csv"; a.click();
