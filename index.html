@@ -106,6 +106,10 @@
     0%,100%{box-shadow:0 0 0 0 rgba(224,83,61,.55)}
     50%{box-shadow:0 0 0 9px rgba(224,83,61,0)}
   }
+  .reset{
+    display:block;margin:16px auto 0;background:none;border:none;color:var(--accent);
+    font-size:13px;text-decoration:underline;cursor:pointer;
+  }
 </style>
 </head>
 <body>
@@ -167,6 +171,7 @@
     </div>
     <input type="file" id="importFile" accept=".csv,text/csv" style="display:none">
     <div class="hint"><b>Exporter</b> : ouvre le partage → choisis <b>Proton Drive</b> (à partager en lecture à ta neurologue).<br><b>Importer</b> : recharge un CSV sauvegardé (ex. après un effacement de Safari ou un changement de téléphone).</div>
+    <button id="resetBtn" class="reset">Effacer toutes les données</button>
   </div>
 </div>
 
@@ -360,6 +365,13 @@ function importCSV(text){
   save(all); render(); buildBilan();
   toast(n?`✓ ${n} crise(s) importée(s)`:"Aucune nouvelle crise");
 }
+resetBtn.onclick=()=>{
+  if(load().length===0){ toast("Déjà vide"); return; }
+  if(confirm("Effacer TOUTES les crises ? Cette action est irréversible.")){
+    localStorage.removeItem(KEY); localStorage.removeItem(DKEY); localStorage.removeItem(BKEY);
+    render(); buildBilan(); toast("✓ Données effacées");
+  }
+};
 importBtn.onclick=()=>importFile.click();
 importFile.onchange=e=>{
   const f=e.target.files[0]; if(!f) return;
